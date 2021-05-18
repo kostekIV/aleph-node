@@ -1,6 +1,5 @@
-use crate::{data_io::finalize_block, justification::AlephJustification, AuthorityId};
-use aleph_primitives::{AuthoritiesLog, ALEPH_ENGINE_ID};
-use codec::Encode;
+use crate::AuthorityId;
+use aleph_primitives::ALEPH_ENGINE_ID;
 use futures::channel::mpsc;
 use sc_client_api::backend::Backend;
 use sp_api::TransactionFor;
@@ -9,7 +8,6 @@ use sp_consensus::{
     JustificationImport,
 };
 use sp_runtime::{
-    generic::OpaqueDigestItemId,
     traits::{Block as BlockT, Header, NumberFor},
     Justification,
 };
@@ -23,7 +21,7 @@ where
 {
     inner: Arc<I>,
     authorities: Vec<AuthorityId>,
-    justification_rx: mpsc::UnboundedSender<JustificationNotification<Block>>,
+    justification_tx: mpsc::UnboundedSender<JustificationNotification<Block>>,
     _phantom: PhantomData<Be>,
 }
 
@@ -36,36 +34,13 @@ where
     pub fn new(
         inner: Arc<I>,
         authorities: Vec<AuthorityId>,
-        justification_rx: mpsc::UnboundedSender<JustificationNotification<Block>>,
+        justification_tx: mpsc::UnboundedSender<JustificationNotification<Block>>,
     ) -> AlephBlockImport<Block, Be, I> {
         AlephBlockImport {
             inner,
             authorities,
-            justification_rx,
+            justification_tx,
             _phantom: PhantomData,
-        }
-    }
-
-    fn log_change(header: &Block::Header) {
-        let id = OpaqueDigestItemId::Consensus(&ALEPH_ENGINE_ID);
-
-        let log = header.digest().convert_first(|l| {
-            l.try_to(id).map(
-                |log: AuthoritiesLog<AuthorityId, NumberFor<Block>>| match log {
-                    AuthoritiesLog::WillChange {
-                        session_id,
-                        when,
-                        next_authorities,
-                    } => (session_id, when, next_authorities),
-                },
-            )
-        });
-
-        if let Some((session_id, when, _)) = log {
-            log::debug!(
-                target: "afa",
-                "Got new authorities for session #{:?} scheduled for block #{:?}", session_id, when
-            );
         }
     }
 }
@@ -80,7 +55,7 @@ where
         AlephBlockImport {
             inner: self.inner.clone(),
             authorities: self.authorities.clone(),
-            justification_rx: self.justification_rx.clone(),
+            justification_tx: self.justification_tx.clone(),
             _phantom: PhantomData,
         }
     }
@@ -115,8 +90,6 @@ where
         let hash = block.header.hash();
         let justifications = block.justifications.take();
 
-        Self::log_change(&block.header);
-
         log::debug!(target: "afa", "Importing block #{:?}", number);
         let import_result = self.inner.import_block(block, cache).await;
 
@@ -130,10 +103,14 @@ where
             justifications.and_then(|just| just.into_justification(ALEPH_ENGINE_ID))
         {
             let res = self.import_justification(hash, number, (ALEPH_ENGINE_ID, justification));
-            res.unwrap_or_else(|_err| {
-                imported_aux.bad_justification = true;
+            if let Err(ConsensusError::ClientImport(message)) = res {
+                if message == "Aleph can import only Aleph justifications." {
+                    imported_aux.bad_justification = true;
+                }
                 imported_aux.needs_justification = true;
-            });
+            };
+        } else {
+            imported_aux.needs_justification = true;
         }
 
         Ok(ImportResult::Imported(imported_aux))
@@ -166,22 +143,17 @@ where
             ));
         }
 
-        if let Ok(justification) = AlephJustification::decode_and_verify::<Block>(
-            &justification.1,
-            hash,
-            &self.authorities,
-            number,
-        ) {
-            log::debug!(target: "afa", "Finalizing block #{:?} from justification import", number);
-            finalize_block(
-                Arc::clone(&self.inner),
+        match self
+            .justification_tx
+            .unbounded_send(JustificationNotification {
                 hash,
                 number,
-                Some((ALEPH_ENGINE_ID, justification.encode())),
-            );
-            Ok(())
-        } else {
-            Err(ConsensusError::ClientImport("Bad justification".into()))
+                justification: justification.1,
+            }) {
+            Err(_) => Err(ConsensusError::ClientImport(
+                "Could not send justification to ConsensusParty".into(),
+            )),
+            Ok(()) => Ok(()),
         }
     }
 }
@@ -192,4 +164,5 @@ where
 {
     pub justification: Vec<u8>,
     pub hash: Block::Hash,
+    pub number: NumberFor<Block>,
 }
