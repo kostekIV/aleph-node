@@ -38,7 +38,7 @@ pub use frame_support::{
     },
     StorageValue,
 };
-use primitives::AuthorityId as AlephId;
+use primitives::{AuthorityId as AlephId, Session as AuthoritySession};
 
 pub use pallet_balances::Call as BalancesCall;
 pub use pallet_timestamp::Call as TimestampCall;
@@ -521,6 +521,11 @@ impl_runtime_apis! {
     impl primitives::AlephApi<Block> for Runtime {
         fn authorities() -> Vec<AlephId> {
             Aleph::authorities()
+        }
+
+        fn session() -> AuthoritySession<AlephId, BlockNumber> {
+            // TODO needs to add genesis session or some handling here
+            Aleph::session().unwrap()
         }
     }
 }

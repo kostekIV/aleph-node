@@ -17,10 +17,13 @@ mod app {
 }
 
 pub type AuthorityId = app::Public;
+// TODO set same value as in runtime
+pub type BlockNumber = u32;
 
 sp_api::decl_runtime_apis! {
     pub trait AlephApi {
         fn authorities() -> Vec<AuthorityId>;
+        fn session() -> Session<AuthorityId,BlockNumber>;
     }
 }
 
@@ -43,8 +46,8 @@ where
     Id: Encode + Decode,
     Number: Encode + Decode,
 {
-    session_id: u64,
-    start_h: Number,
-    stop_h: Number,
-    authorities: Vec<Id>,
+    pub session_id: u64,
+    pub start_h: Number,
+    pub stop_h: Number,
+    pub authorities: Vec<Id>,
 }

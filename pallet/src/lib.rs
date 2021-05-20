@@ -21,7 +21,7 @@ pub mod pallet {
         sp_std,
     };
     use frame_system::pallet_prelude::*;
-    use primitives::{AuthoritiesLog, ALEPH_ENGINE_ID};
+    use primitives::{AuthoritiesLog, Session, ALEPH_ENGINE_ID};
 
     #[derive(Encode, Decode)]
     pub struct SessionChange<T>
@@ -53,6 +53,8 @@ pub mod pallet {
             if let Some(session_info) = <SessionInfo<T>>::get() {
                 if session_info.authorities_changed && session_info.created_at == block_number {
                     Self::update_authorities(session_info.next_authorities.as_slice());
+                    // TODO: get correct value for start_h
+                    Self::update_session(session_info.session_id, session_info.next_authorities.clone(), block_number);
                     Self::deposit_log(AuthoritiesLog::WillChange {
                         session_id: session_info.session_id,
                         // TODO: this is a stub for now.
@@ -72,12 +74,19 @@ pub mod pallet {
     pub(super) type Authorities<T: Config> = StorageValue<_, Vec<T::AuthorityId>, ValueQuery>;
 
     #[pallet::storage]
+    #[pallet::getter(fn session)]
+    pub(super) type SessionStorage<T: Config> =
+        StorageValue<_, Session<T::AuthorityId, T::BlockNumber>, OptionQuery>;
+
+    #[pallet::storage]
     #[pallet::getter(fn session_info)]
     pub(super) type SessionInfo<T> = StorageValue<_, SessionChange<T>, OptionQuery>;
 
     #[pallet::genesis_config]
     pub struct GenesisConfig<T: Config> {
         pub authorities: Vec<T::AuthorityId>,
+        // TODO add genesis session
+        // pub session: Session<T::AuthorityId, T::BlockNumber>,
     }
 
     #[cfg(feature = "std")]
@@ -85,6 +94,7 @@ pub mod pallet {
         fn default() -> Self {
             Self {
                 authorities: Vec::new(),
+                // TODO add genesis session
             }
         }
     }
@@ -109,11 +119,33 @@ pub mod pallet {
                 authorities_changed: true,
                 created_at: <frame_system::Pallet<T>>::block_number(),
                 next_authorities: authorities.to_vec(),
-            })
+            });
+
+            <SessionStorage<T>>::put(Session {
+                session_id: 0,
+                authorities: authorities.to_vec(),
+                start_h: <frame_system::Pallet<T>>::block_number(),
+                // TODO: add block  slice
+                stop_h: <frame_system::Pallet<T>>::block_number() + (100 as u32).into(),
+            });
         }
 
         pub(crate) fn update_authorities(authorities: &[T::AuthorityId]) {
             <Authorities<T>>::put(authorities);
+        }
+
+        pub(crate) fn update_session(
+            session_id: u64,
+            authorities: Vec<T::AuthorityId>,
+            start_h: T::BlockNumber,
+        ) {
+            <SessionStorage<T>>::put(Session {
+                session_id,
+                authorities,
+                start_h,
+                // TODO: add block  slice
+                stop_h: start_h + (100 as u32).into(),
+            });
         }
 
         pub(crate) fn new_session(changed: bool, authorities: Vec<T::AuthorityId>) {
